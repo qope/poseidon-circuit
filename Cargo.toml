@@ -17,6 +17,7 @@ halo2_proofs = { git = "https://github.com/scroll-tech/halo2.git", branch = "scr
 [features]
 # printout the layout of circuits for demo and some unittests
 print_layout = ["halo2_proofs/dev-graph"]
+legacy = []
 
 [dev-dependencies]
 rand = "0.8"

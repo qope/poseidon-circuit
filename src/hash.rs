@@ -25,10 +25,11 @@ pub trait Hashable: FieldExt {
     }
 }
 
-#[cfg(not(feature="legacy"))]
-const HASHABLE_DOMAIN_SPEC: u128 = 0x10000000000000000;
-#[cfg(feature="legacy")]
-const HASHABLE_DOMAIN_SPEC: u128 = 1;
+/// the domain factor applied to var-len mode hash
+#[cfg(not(feature = "legacy"))]
+pub const HASHABLE_DOMAIN_SPEC: u128 = 0x10000000000000000;
+#[cfg(feature = "legacy")]
+pub const HASHABLE_DOMAIN_SPEC: u128 = 1;
 
 /// indicate an message stream constructed by the field can be hashed, commonly
 /// it just need to update the Domain
@@ -57,7 +58,8 @@ impl MessageHashable for Fr {
     type DomainType = VariableLengthIden3;
 
     fn hash_msg(msg: &[Self], cap: Option<u128>) -> Self {
-        Self::msg_hasher().hash_with_cap(msg, cap.unwrap_or(msg.len() as u128 * HASHABLE_DOMAIN_SPEC))
+        Self::msg_hasher()
+            .hash_with_cap(msg, cap.unwrap_or(msg.len() as u128 * HASHABLE_DOMAIN_SPEC))
     }
 }
 
@@ -80,6 +82,8 @@ pub struct PoseidonHashConfig<Fp: FieldExt> {
     control_step_range: TableColumn,
     s_table: Selector,
     s_custom: Selector,
+    /// the configured step in var-len mode, i.e (`input_width * bytes in each field`)
+    pub step: usize,
 }
 
 impl<Fp: Hashable> PoseidonHashConfig<Fp> {
@@ -179,7 +183,9 @@ impl<Fp: Hashable> PoseidonHashConfig<Fp> {
 
             vec![
                 s_enable.clone()
-                    * (ctrl + Expression::Constant(Fp::from_u128(step as u128 * HASHABLE_DOMAIN_SPEC)) - ctrl_prev),
+                    * (ctrl
+                        + Expression::Constant(Fp::from_u128(step as u128 * HASHABLE_DOMAIN_SPEC))
+                        - ctrl_prev),
                 s_enable * (Expression::Constant(Fp::one()) - ctrl_bool),
             ]
         });
@@ -256,6 +262,7 @@ impl<Fp: Hashable> PoseidonHashConfig<Fp> {
             s_table,
             s_custom,
             s_sponge_continue,
+            step,
         }
     }
 }
@@ -266,7 +273,7 @@ pub struct PoseidonHashTable<Fp> {
     /// the input messages for hashes
     pub inputs: Vec<[Fp; 2]>,
     /// the control flag for each permutation
-    pub controls: Vec<Fp>,
+    pub controls: Vec<u64>,
     /// the expected hash output for checking
     pub checks: Vec<Option<Fp>>,
     /// the custom hash for nil message
@@ -291,7 +298,7 @@ impl<Fp: FieldExt> PoseidonHashTable<Fp> {
         for (a, b, c) in src {
             self.inputs.push([*a, *b]);
             self.checks.push(Some(*c));
-            self.controls.push(Fp::zero());
+            self.controls.push(0);
         }
     }
 
@@ -310,8 +317,6 @@ impl<Fp: FieldExt> PoseidonHashTable<Fp> {
                 None
             }
         })
-        .map(|n|n as u128 * HASHABLE_DOMAIN_SPEC)
-        .map(Fp::from_u128)
         .take(new_inps.len())
         .collect();
 
@@ -466,12 +471,14 @@ impl<'d, Fp: Hashable, const STEP: usize> PoseidonHashChip<'d, Fp, STEP> {
         let mut last_offset = 0;
 
         for (i, ((inp, control), check)) in inputs_i.zip(controls_i).zip(checks_i).enumerate() {
-            let control = control.copied().unwrap_or_else(Fp::zero);
+            let control = control.copied().unwrap_or(0);
             let offset = i + begin_offset;
             last_offset = offset;
 
+            let control_as_flag = Fp::from_u128(control as u128 * HASHABLE_DOMAIN_SPEC);
+
             if is_new_sponge {
-                state[0] = control;
+                state[0] = control_as_flag;
                 process_start = offset;
             }
 
@@ -532,7 +539,7 @@ impl<'d, Fp: Hashable, const STEP: usize> PoseidonHashChip<'d, Fp, STEP> {
             for (tip, col, val) in [
                 ("hash input first", config.hash_table[1], inp[0]),
                 ("hash input second", config.hash_table[2], inp[1]),
-                ("state input control", config.hash_table[3], control),
+                ("state input control", config.hash_table[3], control_as_flag),
                 (
                     "state beginning flag",
                     config.hash_table[4],
@@ -541,7 +548,7 @@ impl<'d, Fp: Hashable, const STEP: usize> PoseidonHashChip<'d, Fp, STEP> {
                 (
                     "state input control_aux",
                     config.control_aux,
-                    control.invert().unwrap_or_else(Fp::zero),
+                    control_as_flag.invert().unwrap_or_else(Fp::zero),
                 ),
                 (
                     "state continue control",
@@ -557,7 +564,7 @@ impl<'d, Fp: Hashable, const STEP: usize> PoseidonHashChip<'d, Fp, STEP> {
                 )?;
             }
 
-            is_new_sponge = control <= Fp::from_u128(STEP as u128 * HASHABLE_DOMAIN_SPEC);
+            is_new_sponge = control <= STEP as u64;
 
             //fill all the hash_table[0] with result hash
             if is_new_sponge {
@@ -718,7 +725,7 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
-            let hash_tbl = [0;5].map(|_| meta.advice_column());
+            let hash_tbl = [0; 5].map(|_| meta.advice_column());
             (
                 PoseidonHashConfig::configure_sub(meta, hash_tbl, TEST_STEP),
                 4,
@@ -806,7 +813,7 @@ mod tests {
         let k = 8;
         let circuit = PoseidonHashTable {
             inputs: vec![message1, message2],
-            controls: vec![Fr::from_u128(45*HASHABLE_DOMAIN_SPEC), Fr::from_u128(13*HASHABLE_DOMAIN_SPEC)],
+            controls: vec![45, 13],
             //checks: vec![None, Some(Fr::from_str_vartime("15002881182751877599173281392790087382867290792048832034781070831698029191486").unwrap())],
             ..Default::default()
         };
@@ -815,7 +822,7 @@ mod tests {
 
         let circuit = PoseidonHashTable {
             inputs: vec![message1, message2, message1],
-            controls: vec![Fr::from_u128(64*HASHABLE_DOMAIN_SPEC), Fr::from_u128(32*HASHABLE_DOMAIN_SPEC), Fr::zero()],
+            controls: vec![64, 32],
             checks: Vec::new(),
             ..Default::default()
         };
@@ -824,7 +831,7 @@ mod tests {
 
         let circuit = PoseidonHashTable::<Fr> {
             inputs: vec![message2],
-            controls: vec![Fr::from_u128(13*HASHABLE_DOMAIN_SPEC)],
+            controls: vec![13],
             ..Default::default()
         };
         let prover = MockProver::run(k, &circuit, vec![]).unwrap();

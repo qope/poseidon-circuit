@@ -106,8 +106,8 @@ impl<Fp: Hashable> PoseidonHashConfig<Fp> {
         let state = [0; 3].map(|_| meta.advice_column());
         let partial_sbox = meta.advice_column();
         let constants = [0; 6].map(|_| meta.fixed_column());
-        let s_table = meta.selector();
-        let s_custom = meta.selector();
+        let s_table = meta.complex_selector();
+        let s_custom = meta.complex_selector();
 
         let hash_table_aux = [0, 1, 2, 3, 4, 5].map(|idx| {
             if idx < 5 {

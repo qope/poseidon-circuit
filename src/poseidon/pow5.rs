@@ -35,7 +35,7 @@ impl<F: FieldExt> Var<F> for AssignedCell<F, F> {
 /// Configuration for a [`Pow5Chip`].
 #[derive(Clone, Debug)]
 pub struct Pow5Config<F: FieldExt, const WIDTH: usize, const RATE: usize> {
-    pub(crate) state: [Column<Advice>; WIDTH],
+    pub state: [Column<Advice>; WIDTH],
     partial_sbox: Column<Advice>,
     rc_a: [Column<Fixed>; WIDTH],
     rc_b: [Column<Fixed>; WIDTH],
